@@ -18,27 +18,27 @@
 /*
  * Copyright (C) 2019 ScyllaDB
  */
-#include <seastar/fs/block_allocator.hh>
+#include "fs/block_allocator.hh"
 #include <cassert>
 
 namespace seastar {
 
 block_allocator::block_allocator(std::unordered_map<size_t, bool> bp, std::queue<size_t> fb)
-        : block_pool(bp), free_blocks(fb) {};
+        : _block_pool(std::move(bp)), _free_blocks(std::move(fb)) {};
 
 size_t block_allocator::alloc() {
-    assert(!free_blocks.empty());
-    size_t ret = free_blocks.front();
-    free_blocks.pop();
-    block_pool[ret] = false;
+    assert(!_free_blocks.empty());
+    size_t ret = _free_blocks.front();
+    _free_blocks.pop();
+    _block_pool[ret] = false;
     return ret;
 }
 
 void block_allocator::free(size_t addr) {
-    assert(block_pool.count(addr) == 1);
-    assert(!block_pool[addr]);
-    free_blocks.push(addr);
-    block_pool[addr] = true;
+    assert(_block_pool.count(addr) == 1);
+    assert(!_block_pool[addr]);
+    _free_blocks.push(addr);
+    _block_pool[addr] = true;
 }
 
 }
