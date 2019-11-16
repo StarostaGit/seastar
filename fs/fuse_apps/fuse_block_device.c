@@ -138,8 +138,7 @@ static int block_read(const char *path, char *buf, size_t size, off_t offset,
 
     if (fi == NULL) {
         fd = open(path, O_RDONLY);
-    }
-    else {
+    } else {
         fd = fi->fh;
     }
 
