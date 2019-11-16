@@ -192,9 +192,11 @@ int main(int argc, char *argv[]) {
 
     /* When --help is specified, first print our own file-system
        specific help text, then signal fuse_main() to show
-       additional help (by adding `--help` to the options again)
-       without usage: line (by setting argv[0] to the empty
-       string) */
+       additional help (by adding `--help` to the options again).
+       Setting argv[0] to the empty string guarantees that line
+       usage: /path/to/exec [options] <mountpoint>
+       will be printed only in show_help() function, not in both
+       show_help() and fuse_main(). */
     if (options.show_help) {
         show_help(argv[0]);
         assert(fuse_opt_add_arg(&args, "--help") == 0);
