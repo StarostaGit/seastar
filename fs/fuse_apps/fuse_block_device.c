@@ -2,20 +2,20 @@
       gcc fuse_block_device.c -o fuse_block_device `pkg-config fuse3 --cflags --libs`
 */
 
-#include <sys/types.h>
 #define FUSE_USE_VERSION 31
 
-#include <fuse.h>
-#include <stdio.h>
-#include <string.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stddef.h>
-#include <assert.h>
-#include <sys/ioctl.h>
+#include <fuse.h>
 #include <linux/fs.h>
-#include <unistd.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 /*
  * Command line options
