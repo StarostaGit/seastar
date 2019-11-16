@@ -68,7 +68,7 @@ static int block_getattr(const char *path, struct stat *stbuf,
     if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
-    } else if (strcmp(path+1, options.filename) == 0) {
+    } else if (strcmp(path + 1, options.filename) == 0) {
         blockdev_size = get_blockdev_size(options.blockdev);
         if (blockdev_size >= 0) {
             stbuf->st_size = blockdev_size;
@@ -105,7 +105,7 @@ static int block_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int block_open(const char *path, struct fuse_file_info *fi) {
     int fd;
 
-    if (strcmp(path+1, options.filename) != 0) {
+    if (strcmp(path + 1, options.filename) != 0) {
         return -ENOENT;
     }
 
@@ -132,7 +132,7 @@ static int block_read(const char *path, char *buf, size_t size, off_t offset,
         struct fuse_file_info *fi) {
     int fd, res;
 
-    if (strcmp(path+1, options.filename) != 0) {
+    if (strcmp(path + 1, options.filename) != 0) {
         return -ENOENT;
     }
 
