@@ -18,30 +18,25 @@
 /*
  * Copyright (C) 2019 ScyllaDB
  */
-#include "fs/block_allocator.hh"
-#include <cassert>
+
+#pragma once
+
+#include <unordered_set>
+#include <queue>
 
 namespace seastar {
 
 namespace fs{
 
-block_allocator::block_allocator(std::queue<size_t> fb)
-        : _allocated_blocks(), _free_blocks(fb) {};
-
-size_t block_allocator::alloc() {
-    assert(!_free_blocks.empty());
-    size_t ret = _free_blocks.front();
-    _free_blocks.pop();
-    _allocated_blocks.insert(ret);
-    return ret;
-}
-
-void block_allocator::free(size_t addr) {
-    assert(_allocated_blocks.count(addr) == 1);
-    _free_blocks.push(addr);    
-    _allocated_blocks.erase(addr);
-
-}
+class block_allocator {
+    std::unordered_set<size_t> _allocated_blocks;
+    std::queue<size_t> _free_blocks;
+public:
+    block_allocator(std::queue<size_t>);
+    ~block_allocator() = default;
+    size_t alloc();
+    void free(size_t addr);
+};
 
 }
 
