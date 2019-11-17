@@ -26,7 +26,7 @@ namespace seastar {
 namespace fs {
 
 block_allocator::block_allocator(std::queue<size_t> fb)
-        : _allocated_blocks(), _free_blocks(std::move(fb)) {};
+        : _free_blocks(std::move(fb)) {}
 
 size_t block_allocator::alloc() {
     assert(!_free_blocks.empty());
