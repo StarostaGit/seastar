@@ -26,14 +26,13 @@
 
 namespace seastar {
 
-namespace fs{
+namespace fs {
 
 class block_allocator {
     std::unordered_set<size_t> _allocated_blocks;
     std::queue<size_t> _free_blocks;
 public:
     block_allocator(std::queue<size_t>);
-    ~block_allocator() = default;
     size_t alloc();
     void free(size_t addr);
 };
