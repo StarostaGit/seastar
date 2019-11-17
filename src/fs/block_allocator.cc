@@ -40,7 +40,6 @@ void block_allocator::free(size_t addr) {
     assert(_allocated_blocks.count(addr) == 1);
     _free_blocks.push(addr);    
     _allocated_blocks.erase(addr);
-
 }
 
 }
