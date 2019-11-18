@@ -25,18 +25,18 @@ namespace seastar {
 
 namespace fs {
 
-block_allocator::block_allocator(std::queue<size_t> fb)
+block_allocator::block_allocator(std::queue<uint64_t> fb)
         : _free_blocks(std::move(fb)) {}
 
-size_t block_allocator::alloc() {
+uint64_t block_allocator::alloc() {
     assert(!_free_blocks.empty());
-    size_t ret = _free_blocks.front();
+    uint64_t ret = _free_blocks.front();
     _free_blocks.pop();
     _allocated_blocks.insert(ret);
     return ret;
 }
 
-void block_allocator::free(size_t addr) {
+void block_allocator::free(uint64_t addr) {
     assert(_allocated_blocks.count(addr) == 1);
     _free_blocks.push(addr);    
     _allocated_blocks.erase(addr);

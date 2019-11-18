@@ -29,12 +29,12 @@ namespace seastar {
 namespace fs {
 
 class block_allocator {
-    std::unordered_set<size_t> _allocated_blocks;
-    std::queue<size_t> _free_blocks;
+    std::unordered_set<uint64_t> _allocated_blocks;
+    std::queue<uint64_t> _free_blocks;
 public:
-    block_allocator(std::queue<size_t>);
-    size_t alloc();
-    void free(size_t addr);
+    block_allocator(std::queue<uint64_t>);
+    uint64_t alloc();
+    void free(uint64_t addr);
 };
 
 }
