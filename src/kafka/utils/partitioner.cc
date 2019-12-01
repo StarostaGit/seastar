@@ -20,27 +20,28 @@
  * Copyright (C) 2019 ScyllaDB Ltd.
  */
 
-#pragma once
-
-#include <istream>
-#include <ostream>
-
-#include "api_versions_response.hh"
+#include "partitioner.hh"
+#include <boost/functional/hash.hpp>
 
 namespace seastar {
 
 namespace kafka {
 
-class api_versions_request {
-public:
-    using response_type = api_versions_response;
-    static constexpr int16_t API_KEY = 18;
-    static constexpr int16_t MIN_SUPPORTED_VERSION = 0;
-    static constexpr int16_t MAX_SUPPORTED_VERSION = 2;
+metadata_response_partition basic_partitioner::get_partition(const std::string &key, const kafka_array_t<metadata_response_partition> &partitions) {
+    size_t index = std::rand() % partitions->size();
+    return partitions[index];
+}
 
-    void serialize(std::ostream &os, int16_t api_version) const;
-    void deserialize(std::istream &is, int16_t api_version);
-};
+metadata_response_partition rr_partitioner::get_partition(const std::string &key, const kafka_array_t<metadata_response_partition> &partitions) {
+    if(!key.empty()) {
+        boost::hash<std::string> key_hash;
+        std::size_t h = key_hash(key);
+        return partitions[h % partitions->size()];
+    }
+    else {
+        return partitions[(counter++) % partitions->size()];
+    }
+}
 
 }
 

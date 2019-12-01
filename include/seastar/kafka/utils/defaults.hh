@@ -22,25 +22,25 @@
 
 #pragma once
 
-#include <istream>
-#include <ostream>
+#include <functional>
+#include <memory>
 
-#include "api_versions_response.hh"
+#include "../../../../src/kafka/utils/partitioner.hh"
+
+#include <seastar/core/future.hh>
 
 namespace seastar {
 
 namespace kafka {
 
-class api_versions_request {
-public:
-    using response_type = api_versions_response;
-    static constexpr int16_t API_KEY = 18;
-    static constexpr int16_t MIN_SUPPORTED_VERSION = 0;
-    static constexpr int16_t MAX_SUPPORTED_VERSION = 2;
+namespace defaults {
 
-    void serialize(std::ostream &os, int16_t api_version) const;
-    void deserialize(std::istream &is, int16_t api_version);
-};
+std::function<future<>(uint32_t)> exp_retry_backoff(uint32_t base_ms, uint32_t max_backoff_ms);
+
+std::unique_ptr<partitioner> round_robin_partitioner();
+std::unique_ptr<partitioner> random_partitioner();
+
+}
 
 }
 
