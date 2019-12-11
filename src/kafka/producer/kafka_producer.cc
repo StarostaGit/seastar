@@ -44,83 +44,104 @@ namespace seastar {
 
 namespace kafka {
 
-kafka_producer::kafka_producer(std::string client_id) {
-    _correlation_id = 0;
-    _client_id = client_id;
-}
-
 seastar::future<> kafka_producer::init(std::string server_address, uint16_t port) {
-    auto connection_future = kafka_connection::connect(server_address, port, _client_id, 500).then([this] (auto connection) {
-        _connection = connection;
-    });
+    auto connection_future = _connection_manager.connect(server_address, port);
 
     // TODO ApiVersions
 
     return connection_future.then([this] {
-        return refresh_metadata();
+        return refresh_metadata().discard_result();
     });
 }
 
-seastar::future<> kafka_producer::produce(std::string topic_name, std::string key, std::string value, int32_t partition_index) {
-    kafka::produce_request req;
-    req._acks = -1;
-    req._timeout_ms = 30000;
+seastar::future<> kafka_producer::produce(std::string topic_name, std::string key, std::string value) {
+    return refresh_metadata().then(
+        [this, topic_name = std::move(topic_name), key = std::move(key), value = std::move(value)] (metadata_response metadata) {
 
-    kafka::produce_request_topic_produce_data topic_data;
-    topic_data._name = topic_name;
+            // find metadata for our topic of interest
+            metadata_response_topic topic_metadata;
+            for (const auto& topic : *metadata._topics) {
+                if (*topic._name == topic_name) {
+                    topic_metadata = topic;
+                    break;
+                }
+            }
 
-    kafka::produce_request_partition_produce_data partition_data;
-    partition_data._partition_index = partition_index;
+            // get partition
+            const metadata_response_partition partition = _partitioner.get_partition(key, topic_metadata._partitions);
 
-    kafka::kafka_records records;
-    kafka::kafka_record_batch record_batch;
+            kafka::produce_request req;
+            req._acks = -1;
+            req._timeout_ms = 30000;
 
-    record_batch._base_offset = 0;
-    record_batch._partition_leader_epoch = -1;
-    record_batch._magic = 2;
-    record_batch._compression_type = kafka::kafka_record_compression_type::NO_COMPRESSION;
-    record_batch._timestamp_type = kafka::kafka_record_timestamp_type::CREATE_TIME;
-    record_batch._first_timestamp = 0x16e5b6eba2c; // TODO it should be a real time
-    record_batch._producer_id = -1;
-    record_batch._producer_epoch = -1;
-    record_batch._base_sequence = -1;
-    record_batch._is_transactional = false;
-    record_batch._is_control_batch = false;
+            kafka::produce_request_topic_produce_data topic_data;
+            topic_data._name = topic_name;
 
-    kafka::kafka_record record;
-    record._timestamp_delta = 0;
-    record._offset_delta = 0;
-    record._key = key;
-    record._value = value;
-    record._headers = std::vector<kafka::kafka_record_header>();
+            kafka::produce_request_partition_produce_data partition_data;
+            partition_data._partition_index = partition._partition_index;
 
-    record_batch._records.push_back(record);
-    records._record_batches.push_back(record_batch);
+            kafka::kafka_records records;
+            kafka::kafka_record_batch record_batch;
 
-    partition_data._records = records;
+            record_batch._base_offset = 0;
+            record_batch._partition_leader_epoch = -1;
+            record_batch._magic = 2;
+            record_batch._compression_type = kafka::kafka_record_compression_type::NO_COMPRESSION;
+            record_batch._timestamp_type = kafka::kafka_record_timestamp_type::CREATE_TIME;
+            record_batch._first_timestamp = 0x16e5b6eba2c; // TODO it should be a real time
+            record_batch._producer_id = -1;
+            record_batch._producer_epoch = -1;
+            record_batch._base_sequence = -1;
+            record_batch._is_transactional = false;
+            record_batch._is_control_batch = false;
 
-    kafka::kafka_array_t<kafka::produce_request_partition_produce_data> partitions{
-            std::vector<kafka::produce_request_partition_produce_data>()};
-    partitions->push_back(partition_data);
-    topic_data._partitions = partitions;
+            kafka::kafka_record record;
+            record._timestamp_delta = 0;
+            record._offset_delta = 0;
+            record._key = key;
+            record._value = value;
+            record._headers = std::vector<kafka::kafka_record_header>();
 
-    kafka::kafka_array_t<kafka::produce_request_topic_produce_data> topics{
-            std::vector<kafka::produce_request_topic_produce_data>()};
-    topics->push_back(topic_data);
+            record_batch._records.push_back(record);
+            records._record_batches.push_back(record_batch);
 
-    req._topics = topics;
+            partition_data._records = records;
 
-   return _connection->send(req).discard_result();
+            kafka::kafka_array_t<kafka::produce_request_partition_produce_data> partitions{
+                    std::vector<kafka::produce_request_partition_produce_data>()};
+            partitions->push_back(partition_data);
+            topic_data._partitions = partitions;
+
+            kafka::kafka_array_t<kafka::produce_request_topic_produce_data> topics{
+                    std::vector<kafka::produce_request_topic_produce_data>()};
+            topics->push_back(topic_data);
+
+            req._topics = topics;
+
+            // find partition's leader's address and port
+            metadata_response_broker leader;
+            for (const auto& broker : *metadata._brokers) {
+                if (*broker._node_id == *partition._leader_id) {
+                    leader = broker;
+                    break;
+                }
+            }
+
+            return _connection_manager.connect(*leader._host, (uint16_t)*leader._port).then([this, req, leader] {
+                return _connection_manager.get_connection(*leader._host).value()->send(req);
+            });
+
+    }).discard_result();
 }
 
-seastar::future<> kafka_producer::refresh_metadata() {
+seastar::future<metadata_response> kafka_producer::refresh_metadata() {
     kafka::metadata_request req;
 
     req._allow_auto_topic_creation = true;
     req._include_cluster_authorized_operations = true;
     req._include_topic_authorized_operations = true;
 
-    return _connection->send(req).discard_result();
+    return _connection_manager.ask_for_metadata(req);
 }
 
 }

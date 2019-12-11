@@ -64,7 +64,7 @@ int main(int ac, char** av) {
                 fprint(std::cout, "Enter value: ");
                 std::cin >> value;
 
-                producer.produce(topic, key, value, 0).wait();
+                producer.produce(topic, key, value).wait();
             }
         });
     });
