@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <chrono>
 #include <seastar/core/future.hh>
 #include <seastar/kafka/producer/producer_properties.hh>
 #include "../protocol/metadata_response.hh"
@@ -45,6 +46,8 @@ struct sender_message {
     std::string _key;
     std::string _value;
 
+    std::chrono::time_point<std::chrono::system_clock> _timestamp;
+
     std::string _topic;
     int32_t _partition_index;
 
@@ -52,6 +55,7 @@ struct sender_message {
     promise<> _promise;
 
     sender_message() :
+        _timestamp(std::chrono::system_clock::now()),
         _partition_index(0),
         _error_code(error::kafka_error_code::UNKNOWN_SERVER_ERROR) {}
     sender_message(sender_message&& s) = default;

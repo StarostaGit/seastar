@@ -113,7 +113,9 @@ void sender::queue_requests() {
                 record_batch._magic = 2;
                 record_batch._compression_type = kafka::kafka_record_compression_type::NO_COMPRESSION;
                 record_batch._timestamp_type = kafka::kafka_record_timestamp_type::CREATE_TIME;
-                record_batch._first_timestamp = 0x16e5b6eba2c; // TODO it should be a real time
+
+                auto first_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(messages[0]->_timestamp.time_since_epoch()).count();
+                record_batch._first_timestamp = first_timestamp;
                 record_batch._producer_id = -1;
                 record_batch._producer_epoch = -1;
                 record_batch._base_sequence = -1;
@@ -121,8 +123,10 @@ void sender::queue_requests() {
                 record_batch._is_control_batch = false;
 
                 for (size_t i = 0; i < messages.size(); i++) {
+                    auto current_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(messages[i]->_timestamp.time_since_epoch()).count();
+
                     kafka::kafka_record record;
-                    record._timestamp_delta = 0;
+                    record._timestamp_delta = current_timestamp - first_timestamp;
                     record._offset_delta = i;
                     record._key = messages[i]->_key;
                     record._value = messages[i]->_value;
