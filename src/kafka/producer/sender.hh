@@ -26,6 +26,7 @@
 #include <vector>
 #include <map>
 #include <seastar/core/future.hh>
+#include <seastar/kafka/producer/producer_properties.hh>
 #include "../protocol/metadata_response.hh"
 #include "../protocol/produce_response.hh"
 #include "../connection/connection_manager.hh"
@@ -74,10 +75,13 @@ private:
 
     uint32_t _connection_timeout;
 
+    ack_policy _acks;
+
     std::optional<connection_id> broker_for_topic_partition(const std::string& topic, int32_t partition_index);
     connection_id broker_for_id(int32_t id);
 
     void set_error_code_for_broker(const connection_id& broker, const error::kafka_error_code& error_code);
+    void set_success_for_broker(const connection_id& broker);
     void set_error_code_for_topic_partition(const std::string& topic, int32_t partition_index,
             const error::kafka_error_code& error_code);
     void set_success_for_topic_partition(const std::string& topic, int32_t partition_index);
@@ -90,7 +94,8 @@ private:
     future<> process_messages_errors();
     
 public:
-    sender(connection_manager& connection_manager, metadata_manager& metadata_manager, uint32_t connection_timeout);
+    sender(connection_manager& connection_manager, metadata_manager& metadata_manager,
+            uint32_t connection_timeout, ack_policy acks);
 
     void move_messages(std::vector<sender_message>& messages);
     size_t messages_size() const;

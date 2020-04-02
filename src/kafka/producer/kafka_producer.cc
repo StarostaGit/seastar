@@ -50,7 +50,8 @@ kafka_producer::kafka_producer(producer_properties&& properties)
     : _properties(std::move(properties)),
       _connection_manager(_properties._client_id),
       _metadata_manager(_connection_manager, _properties._metadata_refresh),
-      _batcher(_metadata_manager, _connection_manager, _properties._retries, std::move(_properties._retry_backoff_strategy)) {}
+      _batcher(_metadata_manager, _connection_manager, _properties._retries,
+              _properties._acks, std::move(_properties._retry_backoff_strategy)) {}
 
 seastar::future<> kafka_producer::init() {
     return _connection_manager.init(_properties._servers, _properties._request_timeout).then([this] {

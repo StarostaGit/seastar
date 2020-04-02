@@ -30,10 +30,12 @@ namespace kafka {
 
 sender::sender(connection_manager& connection_manager,
         metadata_manager& metadata_manager,
-        uint32_t connection_timeout)
+        uint32_t connection_timeout,
+        ack_policy acks)
             : _connection_manager(connection_manager),
             _metadata_manager(metadata_manager),
-            _connection_timeout(connection_timeout) {}
+            _connection_timeout(connection_timeout),
+            _acks(acks) {}
 
 std::optional<sender::connection_id> sender::broker_for_topic_partition(const std::string& topic, int32_t partition_index) {
     // TODO: Improve complexity from O(N) to O(log N).
@@ -84,7 +86,7 @@ void sender::queue_requests() {
     _responses.clear();
     for (auto& [broker, messages_by_topic_partition] : _messages_split_by_broker_topic_partition) {
         kafka::produce_request req;
-        req._acks = -1;
+        req._acks = static_cast<int16_t>(_acks);
         req._timeout_ms = 30000;
 
         kafka::kafka_array_t<kafka::produce_request_topic_produce_data> topics{
@@ -135,7 +137,8 @@ void sender::queue_requests() {
             req._topics->push_back(topic_data);
         }
 
-        _responses.emplace_back(_connection_manager.send(req, broker.first, broker.second, _connection_timeout)
+        auto with_response = _acks != ack_policy::NONE;
+        _responses.emplace_back(_connection_manager.send(req, broker.first, broker.second, _connection_timeout, with_response)
             .then([broker](auto response) {
                 return std::make_pair(broker, response);
         }));
@@ -148,6 +151,18 @@ void sender::set_error_code_for_broker(const sender::connection_id& broker, cons
             for (auto& message : messages) {
                 (void)topic; (void)partition;
                 message->_error_code = error_code;
+            }
+        }
+    }
+}
+
+void sender::set_success_for_broker(const sender::connection_id& broker) {
+    for (auto& [topic, messages_by_partition] : _messages_split_by_broker_topic_partition[broker]) {
+        for (auto& [partition, messages] : messages_by_partition) {
+            for (auto& message : messages) {
+                (void)topic; (void)partition;
+                message->_error_code = error::kafka_error_code::NONE;
+                message->_promise.set_value();
             }
         }
     }
@@ -227,6 +242,11 @@ void sender::set_error_codes_for_responses(std::vector<future<std::pair<connecti
         auto [broker, response_message] = response.get0();
         if (response_message._error_code != error::kafka_error_code::NONE) {
             set_error_code_for_broker(broker, *response_message._error_code);
+            continue;
+        }
+        if (response_message._responses.is_null()) {
+            // No detailed information (when ack_policy::NONE) so set success for the broker.
+            set_success_for_broker(broker);
             continue;
         }
         for (auto& topic_response : *response_message._responses) {

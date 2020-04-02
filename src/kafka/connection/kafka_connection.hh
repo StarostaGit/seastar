@@ -172,6 +172,43 @@ public:
         });
         return response_future;
     }
+
+    template<typename RequestType>
+    future<typename RequestType::response_type> send_without_response(RequestType request) {
+        return send_without_response(std::move(request), _api_versions.max_version<RequestType>());
+    }
+
+    template<typename RequestType>
+    future<typename RequestType::response_type> send_without_response(RequestType request, int16_t api_version) {
+        auto correlation_id = _correlation_id++;
+        auto serialized_message = serialize_request(std::move(request), correlation_id, api_version);
+
+        auto request_future = with_semaphore(_send_semaphore, 1,
+        [this, serialized_message = std::move(serialized_message)]() mutable {
+            return send_request(std::move(serialized_message));
+        }).then([] {
+            typename RequestType::response_type response;
+            response._error_code = error::kafka_error_code::NONE;
+            return response;
+        }).handle_exception([] (auto ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (seastar::timed_out_error& e) {
+                typename RequestType::response_type response;
+                response._error_code = error::kafka_error_code::REQUEST_TIMED_OUT;
+                return response;
+            } catch (parsing_exception& e) {
+                typename RequestType::response_type response;
+                response._error_code = error::kafka_error_code::CORRUPT_MESSAGE;
+                return response;
+            } catch (...) {
+                typename RequestType::response_type response;
+                response._error_code = error::kafka_error_code::NETWORK_EXCEPTION;
+                return response;
+            }
+        });
+        return request_future;
+    }
 };
 
 }

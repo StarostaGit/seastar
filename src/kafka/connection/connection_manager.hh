@@ -66,7 +66,8 @@ public:
     future<> disconnect(const connection_id& connection);
 
     template<typename RequestType>
-    future<typename RequestType::response_type> send(RequestType request, const std::string& host, uint16_t port, uint32_t timeout) {
+    future<typename RequestType::response_type> send(RequestType request, const std::string& host,
+            uint16_t port, uint32_t timeout, bool with_response=true) {
         // In order to preserve ordering of sends, a semaphore with
         // count = 1 is used due to its FIFO guarantees.
         //
@@ -84,9 +85,11 @@ public:
         // returned as future<future<response>> and "unpacked"
         // outside the semaphore - scheduling inside semaphore
         // (only 1 at the time) and waiting for result outside it.
-        return with_semaphore(_send_semaphore, 1, [this, request = std::move(request), host, port, timeout] {
-            return connect(host, port, timeout).then([request = std::move(request)](auto conn) {
-                auto send_future = conn->send(std::move(request)).finally([conn]{});
+        return with_semaphore(_send_semaphore, 1, [this, request = std::move(request), host, port, timeout, with_response] {
+            return connect(host, port, timeout).then([request = std::move(request), with_response](auto conn) {
+                auto send_future = with_response
+                        ? conn->send(std::move(request)).finally([conn]{})
+                        : conn->send_without_response(std::move(request)).finally([conn]{});
                 return make_ready_future<decltype(send_future)>(std::move(send_future));
             });
         }).then([](auto send_future) {
