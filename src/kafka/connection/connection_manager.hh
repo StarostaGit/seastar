@@ -92,9 +92,9 @@ public:
                         : conn->send_without_response(std::move(request)).finally([conn]{});
                 return make_ready_future<decltype(send_future)>(std::move(send_future));
             });
-        }).then([](auto send_future) {
+        }).then([](future<typename RequestType::response_type> send_future) {
             return send_future;
-        }).handle_exception([] (auto ep) {
+        }).handle_exception([] (std::exception_ptr ep) {
             // Handle connect exceptions.
             // TODO: Disconnect in case of broken connection.
             try {

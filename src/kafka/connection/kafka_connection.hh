@@ -153,7 +153,7 @@ public:
         });
         auto response_future = with_semaphore(_receive_semaphore, 1, [this, correlation_id, api_version] {
             return receive_response<RequestType>(correlation_id, api_version);
-        }).handle_exception([] (auto ep) {
+        }).handle_exception([] (std::exception_ptr ep) {
             try {
                 std::rethrow_exception(ep);
             } catch (seastar::timed_out_error& e) {

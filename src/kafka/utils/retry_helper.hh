@@ -49,7 +49,7 @@ private:
         return _backoff(retry_number)
         .then([this, action = std::forward<AsyncAction>(action), retry_number]() mutable {
             return futurize_apply(action)
-            .then([this, action = std::forward<AsyncAction>(action), retry_number](auto do_retry_val) mutable {
+            .then([this, action = std::forward<AsyncAction>(action), retry_number](bool_class<do_retry_tag> do_retry_val) mutable {
                 if (do_retry_val == do_retry::yes) {
                     return with_retry(std::forward<AsyncAction>(action), retry_number + 1);
                 } else {
