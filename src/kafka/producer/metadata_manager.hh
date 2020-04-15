@@ -36,7 +36,7 @@ class metadata_manager {
 
 private:
     connection_manager& _connection_manager;
-    lw_shared_ptr<const metadata_response> _metadata = nullptr;
+    metadata_response _metadata;
     bool _keep_refreshing = false;
     semaphore _refresh_finished = 0;
     abort_source _stop_refresh;
@@ -50,7 +50,9 @@ public:
     seastar::future<> refresh_metadata();
     void start_refresh();
     future<> stop_refresh();
-    lw_shared_ptr<const metadata_response> get_metadata();
+    // Capturing resulting metadata response object is forbidden,
+    // it can be destroyed any time.
+    metadata_response get_metadata();
 
 };
 

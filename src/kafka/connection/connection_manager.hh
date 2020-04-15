@@ -28,7 +28,7 @@
 
 #include <boost/functional/hash.hpp>
 
-#include <unordered_map>
+#include <map>
 
 namespace seastar {
 
@@ -36,7 +36,7 @@ namespace kafka {
 
 struct metadata_refresh_exception : public std::runtime_error {
 public:
-    metadata_refresh_exception(const std::string& message) : runtime_error(message) {}
+    explicit metadata_refresh_exception(const std::string& message) : runtime_error(message) {}
 };
 
 class connection_manager {
@@ -46,11 +46,13 @@ public:
 
 private:
 
-    std::unordered_map<connection_id, lw_shared_ptr<kafka_connection>, boost::hash<connection_id>> _connections;
+    std::map<connection_id, lw_shared_ptr<kafka_connection>> _connections;
     std::string _client_id;
 
     semaphore _connect_semaphore;
     semaphore _send_semaphore;
+
+    future<> _pending_queue;
 
     future<lw_shared_ptr<kafka_connection>> connect(const std::string& host, uint16_t port, uint32_t timeout);
 
@@ -59,7 +61,8 @@ public:
     explicit connection_manager(std::string client_id)
         : _client_id(std::move(client_id)),
         _connect_semaphore(1),
-        _send_semaphore(1) {}
+        _send_semaphore(1),
+        _pending_queue(make_ready_future<>()) {}
 
     future<> init(const std::vector<connection_id>& servers, uint32_t request_timeout);
     lw_shared_ptr<kafka_connection> get_connection(const connection_id& connection);
@@ -86,18 +89,27 @@ public:
         // outside the semaphore - scheduling inside semaphore
         // (only 1 at the time) and waiting for result outside it.
         return with_semaphore(_send_semaphore, 1, [this, request = std::move(request), host, port, timeout, with_response] {
-            return connect(host, port, timeout).then([request = std::move(request), with_response](auto conn) {
+            auto conn = get_connection({host, port});
+            if (conn.get() != nullptr) {
                 auto send_future = with_response
-                        ? conn->send(std::move(request)).finally([conn]{})
-                        : conn->send_without_response(std::move(request)).finally([conn]{});
+                                   ? conn->send(std::move(request)).finally([conn]{})
+                                   : conn->send_without_response(std::move(request)).finally([conn]{});
                 return make_ready_future<decltype(send_future)>(std::move(send_future));
-            });
-        }).then([](auto send_future) {
+            } else {
+                return connect(host, port, timeout).then([request = std::move(request), with_response](auto conn) {
+                    auto send_future = with_response
+                                       ? conn->send(std::move(request)).finally([conn]{})
+                                       : conn->send_without_response(std::move(request)).finally([conn]{});
+                    return make_ready_future<decltype(send_future)>(std::move(send_future));
+                });
+            }
+        }).then([](future<typename RequestType::response_type> send_future) {
             return send_future;
-        }).handle_exception([] (auto ep) {
-            // Handle connect exceptions.
-            // TODO: Disconnect in case of broken connection.
+        }).handle_exception([this, host, port] (std::exception_ptr ep) {
             try {
+                _pending_queue = _pending_queue.discard_result().then([this, host, port] {
+                   return disconnect({host, port});
+                });
                 std::rethrow_exception(ep);
             } catch (seastar::timed_out_error& e) {
                 typename RequestType::response_type response;
@@ -111,7 +123,9 @@ public:
         });
     }
 
-    future<lw_shared_ptr<const metadata_response>> ask_for_metadata(metadata_request&& request);
+    future<metadata_response> ask_for_metadata(metadata_request&& request);
+
+    future<> disconnect_all();
 
 };
 

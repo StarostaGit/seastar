@@ -40,7 +40,7 @@ sender::sender(connection_manager& connection_manager,
 std::optional<sender::connection_id> sender::broker_for_topic_partition(const std::string& topic, int32_t partition_index) {
     // TODO: Improve complexity from O(N) to O(log N).
     auto metadata = _metadata_manager.get_metadata();
-    for (const auto &current_topic : *metadata->_topics) {
+    for (const auto &current_topic : *metadata._topics) {
         if (*current_topic._name != topic) {
             continue;
         }
@@ -59,7 +59,7 @@ std::optional<sender::connection_id> sender::broker_for_topic_partition(const st
 
 sender::connection_id sender::broker_for_id(int32_t id) {
     auto metadata = _metadata_manager.get_metadata();
-    for (const auto& broker : *metadata->_brokers) {
+    for (const auto& broker : *metadata._brokers) {
         if (*broker._node_id == id) {
             return {*broker._host, *broker._port};
         }
@@ -206,7 +206,8 @@ void sender::send_requests() {
 }
 
 future<> sender::receive_responses() {
-    return when_all(_responses.begin(), _responses.end()).then([this](auto responses){
+    return when_all(_responses.begin(), _responses.end()).then(
+            [this](std::vector<future<std::pair<connection_id, produce_response>>> responses) {
         set_error_codes_for_responses(responses);
         filter_messages();
         return process_messages_errors();

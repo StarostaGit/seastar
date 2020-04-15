@@ -22,6 +22,9 @@
 
 #include "connection_manager.hh"
 #include <seastar/core/thread.hh>
+#include <memory>
+
+#include <utility>
 
 namespace seastar {
 
@@ -64,20 +67,42 @@ future<> connection_manager::disconnect(const connection_id& connection) {
         _connections.erase(conn);
         return conn_ptr->close().finally([conn_ptr]{});
     }
-
     return make_ready_future();
 }
 
-future<lw_shared_ptr<const metadata_response>> connection_manager::ask_for_metadata(seastar::kafka::metadata_request&& request) {
-    return seastar::async({}, [this, request = std::move(request)] {
-        for (auto& conn : _connections) {
-            auto res =  conn.second->send(request).get0();
-            if (res._error_code == error::kafka_error_code::NONE) {
-                return make_lw_shared<const metadata_response>(std::move(res));
+future<metadata_response> connection_manager::ask_for_metadata(seastar::kafka::metadata_request&& request) {
+    auto conn_id = std::optional<connection_id>();
+    return seastar::do_with(metadata_response(), [this, request = std::move(request), conn_id = std::move(conn_id)] (metadata_response& metadata){
+        return seastar::repeat([this, request = std::move(request), conn_id = std::move(conn_id), &metadata] () mutable {
+            auto it = !conn_id ? _connections.begin() : _connections.upper_bound(*conn_id);
+            if (it == _connections.end()) {
+                throw metadata_refresh_exception("No brokers responded.");
             }
-        }
-        throw metadata_refresh_exception("No brokers responded.");
+            conn_id = it->first;
+            return it->second->send(request).then([this, &metadata](metadata_response res) mutable {
+                if (res._error_code == error::kafka_error_code::NONE) {
+                    metadata = std::move(res);
+                    return seastar::stop_iteration::yes;
+                }
+                else {
+                    return seastar::stop_iteration::no;
+                }
+            });
+        }).then([&metadata] () mutable {
+            return std::move(metadata);
+        });
     });
+
+}
+
+future<> connection_manager::disconnect_all() {
+    for (auto& it : _connections) {
+        _pending_queue = _pending_queue.discard_result().then([this, host = it.first.first, port = it.first.second] {
+            return disconnect({host, port});
+        });
+    }
+
+    return _pending_queue.discard_result();
 }
 
 }
