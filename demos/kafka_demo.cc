@@ -24,10 +24,19 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/kafka/producer/kafka_producer.hh>
+#include <seastar/core/smp.hh>
 
 using namespace seastar;
 
 namespace bpo = boost::program_options;
+
+seastar::future<std::string> async_stdin_read() {
+    return seastar::smp::submit_to(1, []{
+       std::string res;
+       std::cin >> res;
+       return res;
+    });
+}
 
 int main(int ac, char** av) {
     app_template app;
@@ -57,7 +66,7 @@ int main(int ac, char** av) {
                 fprint(std::cout,
                        "\nType the topic and the message you want to send below. If you want to quit type 'q'\n");
                 fprint(std::cout, "Enter topic: ");
-                std::cin >> topic;
+                topic = async_stdin_read().get0();
 
                 if (topic == "q") {
                     producer.disconnect().wait();
@@ -66,14 +75,13 @@ int main(int ac, char** av) {
                 }
 
                 fprint(std::cout, "Enter key: ");
-                std::cin >> key;
+                key = async_stdin_read().get0();
                 fprint(std::cout, "Enter value: ");
-                std::cin >> value;
+                value = async_stdin_read().get0();
 
                 (void)producer.produce(topic, key, value).handle_exception([key, value](auto ep) {
                     fprint(std::cout, "Failure sending %s %s: %s.\n", key, value, ep);
                 });
-                producer.flush().wait();
             }
         });
     });

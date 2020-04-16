@@ -51,12 +51,15 @@ kafka_producer::kafka_producer(producer_properties&& properties)
       _connection_manager(_properties._client_id),
       _metadata_manager(_connection_manager, _properties._metadata_refresh),
       _batcher(_metadata_manager, _connection_manager, _properties._retries,
-              _properties._acks, std::move(_properties._retry_backoff_strategy)) {}
+              _properties._acks, _properties._request_timeout, _properties._linger,
+              std::move(_properties._retry_backoff_strategy)) {}
 
 seastar::future<> kafka_producer::init() {
     return _connection_manager.init(_properties._servers, _properties._request_timeout).then([this] {
         _metadata_manager.start_refresh();
         return _metadata_manager.refresh_metadata();
+    }).then([this] {
+        _batcher.start_flush();
     });
 }
 
@@ -82,11 +85,13 @@ seastar::future<> kafka_producer::produce(std::string topic_name, std::string ke
 }
 
 seastar::future<> kafka_producer::flush() {
-    return _batcher.flush(_properties._request_timeout);
+    return _batcher.flush();
 }
 
 seastar::future<> kafka_producer::disconnect() {
-    return _metadata_manager.stop_refresh().then([this] () {
+    return _batcher.stop_flush().then([this] {
+        return _metadata_manager.stop_refresh();
+    }).then([this] () {
         return _connection_manager.disconnect_all();
     });
 }

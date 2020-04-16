@@ -39,16 +39,29 @@ private:
     connection_manager& _connection_manager;
     retry_helper _retry_helper;
     ack_policy _acks;
+    uint32_t _request_timeout;
+
+    bool _keep_refreshing = false;
+    semaphore _refresh_finished = 0;
+    abort_source _stop_refresh;
+    uint32_t _expiration_time;
 public:
     batcher(metadata_manager& metadata_manager, connection_manager& connection_manager,
-            uint32_t max_retries, ack_policy acks, noncopyable_function<future<>(uint32_t)> retry_strategy)
+            uint32_t max_retries, ack_policy acks, uint32_t request_timeout, uint32_t expiration_time,
+            noncopyable_function<future<>(uint32_t)> retry_strategy)
             : _metadata_manager(metadata_manager),
             _connection_manager(connection_manager),
             _retry_helper(max_retries, std::move(retry_strategy)),
-            _acks(acks) {}
+            _acks(acks),
+            _request_timeout(request_timeout),
+            _expiration_time(expiration_time) {}
 
     void queue_message(sender_message message);
-    future<> flush(uint32_t connection_timeout);
+    future<> flush();
+    future<> flush_coroutine(std::chrono::milliseconds dur);
+
+    void start_flush();
+    future<> stop_flush();
 };
 
 }
