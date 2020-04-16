@@ -76,9 +76,9 @@ public:
     uint32_t _metadata_refresh = 300000;
 
     // Identifier of the created producer instance
-    std::string _client_id {};
+    seastar::sstring _client_id {};
     // a list of host-port pairs to use for establishing the initial connection to the cluster
-    std::set<std::pair<std::string, uint16_t>> _servers {};
+    std::set<std::pair<seastar::sstring, uint16_t>> _servers {};
 
     // Strategy according to which we should choose the target partition,
     // based on the given key (or lack thereof)

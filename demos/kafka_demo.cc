@@ -30,9 +30,9 @@ using namespace seastar;
 
 namespace bpo = boost::program_options;
 
-seastar::future<std::string> async_stdin_read() {
+seastar::future<sstring> async_stdin_read() {
     return seastar::smp::submit_to(1, []{
-       std::string res;
+       sstring res;
        std::cin >> res;
        return res;
     });
@@ -61,14 +61,14 @@ int main(int ac, char** av) {
             producer.init().wait();
             fprint(std::cout, "Producer initialized and ready to send\n\n");
 
-            std::string topic, key, value;
+            sstring topic, key, value;
             while (true) {
                 fprint(std::cout,
                        "\nType the topic and the message you want to send below. If you want to quit type 'q'\n");
                 fprint(std::cout, "Enter topic: ");
                 topic = async_stdin_read().get0();
 
-                if (topic == "q") {
+                if (topic.empty() || topic == "q") {
                     producer.disconnect().wait();
                     fprint(std::cout, "Finished succesfully!\n");
                     break;
