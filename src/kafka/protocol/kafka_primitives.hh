@@ -94,6 +94,10 @@ public:
         return error::kafka_error_code::get_error(_value);
     }
 
+    [[nodiscard]] const error::kafka_error_code* operator->() const noexcept {
+        return &error::kafka_error_code::get_error(_value);
+    }
+
     kafka_error_code_t& operator=(const error::kafka_error_code& error) noexcept {
         _value = error._error_code;
         return *this;
