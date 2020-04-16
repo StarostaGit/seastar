@@ -28,8 +28,9 @@ namespace seastar {
 namespace kafka {
 
 void batcher::queue_message(sender_message message) {
+    _messages_byte_size += message.size();
     _messages.emplace_back(std::move(message));
-    if (_expiration_time == 0) {
+    if (_expiration_time == 0 || _messages_byte_size > _buffer_memory) {
         (void) flush();
     }
 }
@@ -42,6 +43,9 @@ future<> batcher::flush() {
             // into sender and send requests in the same continuation,
             // in order to preserve correct order of messages.
             if (!is_batch_loaded) {
+                for (auto& message : _messages) {
+                    _messages_byte_size -= message.size();
+                }
                 sender.move_messages(_messages);
                 is_batch_loaded = true;
             }

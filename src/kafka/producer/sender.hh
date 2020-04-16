@@ -61,6 +61,10 @@ struct sender_message {
     sender_message(sender_message&& s) = default;
     sender_message& operator=(sender_message&& s) = default;
     sender_message(sender_message& s) = delete;
+
+    size_t size() const noexcept {
+        return _key.size() + _value.size();
+    }
 };
 
 class sender {

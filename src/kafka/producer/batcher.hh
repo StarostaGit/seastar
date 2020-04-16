@@ -35,6 +35,8 @@ namespace kafka {
 class batcher {
 private:
     std::vector<sender_message> _messages;
+    size_t _messages_byte_size;
+    uint32_t _buffer_memory;
     metadata_manager& _metadata_manager;
     connection_manager& _connection_manager;
     retry_helper _retry_helper;
@@ -48,8 +50,10 @@ private:
 public:
     batcher(metadata_manager& metadata_manager, connection_manager& connection_manager,
             uint32_t max_retries, ack_policy acks, uint32_t request_timeout, uint32_t expiration_time,
-            noncopyable_function<future<>(uint32_t)> retry_strategy)
-            : _metadata_manager(metadata_manager),
+            uint32_t buffer_memory, noncopyable_function<future<>(uint32_t)> retry_strategy)
+            : _messages_byte_size(0),
+            _buffer_memory(buffer_memory),
+            _metadata_manager(metadata_manager),
             _connection_manager(connection_manager),
             _retry_helper(max_retries, std::move(retry_strategy)),
             _acks(acks),
