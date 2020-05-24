@@ -23,7 +23,7 @@
 
 #include <seastar/http/request_parser.hh>
 #include <seastar/http/request.hh>
-#include <seastar/core/reactor.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/circular_buffer.hh>
@@ -111,11 +111,11 @@ public:
         if (hi == _resp->_headers.end()) {
             return make_ready_future<>();
         }
-        return _write_buf.write(hi->first.begin(), hi->first.size()).then(
+        return _write_buf.write(hi->first.data(), hi->first.size()).then(
                 [this] {
                     return _write_buf.write(": ", 2);
                 }).then([hi, this] {
-            return _write_buf.write(hi->second.begin(), hi->second.size());
+            return _write_buf.write(hi->second.data(), hi->second.size());
         }).then([this] {
             return _write_buf.write("\r\n", 2);
         }).then([hi, this] () mutable {
@@ -143,26 +143,7 @@ public:
     /**
      * URL_decode a substring and place it in the given out sstring
      */
-    static bool url_decode(const compat::string_view& in, sstring& out) {
-        size_t pos = 0;
-        char buff[in.length()];
-        for (size_t i = 0; i < in.length(); ++i) {
-            if (in[i] == '%') {
-                if (i + 3 <= in.size()) {
-                    buff[pos++] = hexstr_to_char(in, i + 1);
-                    i += 2;
-                } else {
-                    return false;
-                }
-            } else if (in[i] == '+') {
-                buff[pos++] = ' ';
-            } else {
-                buff[pos++] = in[i];
-            }
-        }
-        out = sstring(buff, pos);
-        return true;
-    }
+    static bool url_decode(const compat::string_view& in, sstring& out);
 
     /**
      * Add a single query parameter to the parameter list
@@ -208,6 +189,7 @@ public:
     }
 
     future<bool> generate_reply(std::unique_ptr<request> req);
+    void generate_error_reply_and_close(std::unique_ptr<request> req, reply::status_type status, const sstring& msg);
 
     future<> write_body();
 
@@ -219,7 +201,7 @@ public:
 class http_server_tester;
 
 class http_server {
-    std::vector<api_v2::server_socket> _listeners;
+    std::vector<server_socket> _listeners;
     http_stats _stats;
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
@@ -233,6 +215,7 @@ class http_server {
     bool _stopping = false;
     promise<> _all_connections_stopped;
     future<> _stopped = _all_connections_stopped.get_future();
+    size_t _content_length_limit = std::numeric_limits<size_t>::max();
 private:
     void maybe_idle() {
         if (_stopping && !_connections_being_accepted && !_current_connections) {
@@ -275,11 +258,19 @@ public:
         _credentials = credentials;
     }
 
+    size_t get_content_length_limit() const {
+        return _content_length_limit;
+    }
+
+    void set_content_length_limit(size_t limit) {
+        _content_length_limit = limit;
+    }
+
     future<> listen(socket_address addr, listen_options lo) {
         if (_credentials) {
             _listeners.push_back(seastar::tls::listen(_credentials, addr, lo));
         } else {
-            _listeners.push_back(engine().listen(addr, lo));
+            _listeners.push_back(seastar::listen(addr, lo));
         }
         _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1)).discard_result();
         return make_ready_future<>();
@@ -348,14 +339,9 @@ public:
     uint64_t reply_errors() const {
         return _respond_errors;
     }
-    static sstring http_date() {
-        auto t = ::time(nullptr);
-        struct tm tm;
-        gmtime_r(&t, &tm);
-        char tmp[100];
-        strftime(tmp, sizeof(tmp), "%d %b %Y %H:%M:%S GMT", &tm);
-        return tmp;
-    }
+    // Write the current date in the specific "preferred format" defined in
+    // RFC 7231, Section 7.1.1.1.
+    static sstring http_date();
 private:
     boost::intrusive::list<connection> _connections;
     friend class seastar::httpd::connection;
@@ -364,7 +350,7 @@ private:
 
 class http_server_tester {
 public:
-    static std::vector<api_v2::server_socket>& listeners(http_server& server) {
+    static std::vector<server_socket>& listeners(http_server& server) {
         return server._listeners;
     }
 };

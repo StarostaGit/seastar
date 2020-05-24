@@ -22,6 +22,7 @@
 #include <seastar/core/posix.hh>
 #include <seastar/core/align.hh>
 #include <sys/mman.h>
+#include <sys/inotify.h>
 
 namespace seastar {
 
@@ -34,6 +35,13 @@ file_desc::temporary(sstring directory) {
     throw_system_error_on(fd == -1);
     int r = ::unlink(templat.data());
     throw_system_error_on(r == -1); // leaks created file, but what can we do?
+    return file_desc(fd);
+}
+
+file_desc
+file_desc::inotify_init(int flags) {
+    int fd = ::inotify_init1(flags);
+    throw_system_error_on(fd == -1, "could not create inotify instance");
     return file_desc(fd);
 }
 
@@ -64,6 +72,8 @@ posix_thread::posix_thread(attr a, std::function<void ()> func)
     if (r) {
         throw std::system_error(r, std::system_category());
     }
+
+#ifndef SEASTAR_ASAN_ENABLED
     auto stack_size = a._stack_size.size;
     if (!stack_size) {
         stack_size = 2 << 20;
@@ -80,6 +90,8 @@ posix_thread::posix_thread(attr a, std::function<void ()> func)
     if (r) {
         throw std::system_error(r, std::system_category());
     }
+#endif
+
     r = pthread_create(&_pthread, &pa,
                 &posix_thread::start_routine, _func.get());
     if (r) {

@@ -77,13 +77,7 @@ using keepalive_params = compat::variant<tcp_keepalive_params, sctp_keepalive_pa
 class connected_socket_impl;
 class socket_impl;
 
-#if SEASTAR_API_LEVEL <= 1
-
-SEASTAR_INCLUDE_API_V1 namespace api_v1 { class server_socket_impl; }
-
-#endif
-
-SEASTAR_INCLUDE_API_V2 namespace api_v2 { class server_socket_impl; }
+class server_socket_impl;
 class udp_channel_impl;
 class get_impl;
 /// \endcond
@@ -144,6 +138,25 @@ class network_interface_impl;
 /// \addtogroup networking-module
 /// @{
 
+/// Configuration for buffered connected_socket input operations
+///
+/// This structure allows tuning of buffered input operations done via
+/// connected_socket. It is a hint to the implementation and may be
+/// ignored (e.g. the zero-copy native stack does not allocate buffers,
+/// so it ignores buffer-size parameters).
+struct connected_socket_input_stream_config final {
+    /// Initial buffer size to use for input buffering
+    unsigned buffer_size = 8192;
+    /// Minimum buffer size to use for input buffering. The system will decrease
+    /// buffer sizes if it sees a tendency towards small requests, but will not go
+    /// below this buffer size.
+    unsigned min_buffer_size = 512;
+    /// Maximum buffer size to use for input buffering. The system will increase
+    /// buffer sizes if it sees a tendency towards large requests, but will not go
+    /// above this buffer size.
+    unsigned max_buffer_size = 128 * 1024;
+};
+
 /// A TCP (or other stream-based protocol) connection.
 ///
 /// A \c connected_socket represents a full-duplex stream between
@@ -165,8 +178,10 @@ public:
     connected_socket& operator=(connected_socket&& cs) noexcept;
     /// Gets the input stream.
     ///
+    /// \param csisc Configuration for the input_stream returned
+    ///
     /// Gets an object returning data sent from the remote endpoint.
-    input_stream<char> input();
+    input_stream<char> input(connected_socket_input_stream_config csisc = {});
     /// Gets the output stream.
     ///
     /// Gets an object that sends data to the remote endpoint.
@@ -252,11 +267,9 @@ struct accept_result {
     socket_address remote_address;  ///< The address of the peer that connected to us
 };
 
-SEASTAR_INCLUDE_API_V2 namespace api_v2 {
-
 /// A listening socket, waiting to accept incoming network connections.
 class server_socket {
-    std::unique_ptr<net::api_v2::server_socket_impl> _ssi;
+    std::unique_ptr<net::server_socket_impl> _ssi;
     bool _aborted = false;
 public:
     enum class load_balancing_algorithm {
@@ -268,12 +281,14 @@ public:
         // to a specific shard in a server given it knows how many shards server has by choosing
         // src port number accordingly.
         port,
+        // This algorithm distributes all new connections to listen_options::fixed_cpu shard only.
+        fixed,
         default_ = connection_distribution
     };
     /// Constructs a \c server_socket not corresponding to a connection
     server_socket();
     /// \cond internal
-    explicit server_socket(std::unique_ptr<net::api_v2::server_socket_impl> ssi);
+    explicit server_socket(std::unique_ptr<net::server_socket_impl> ssi);
     /// \endcond
     /// Moves a \c server_socket object.
     server_socket(server_socket&& ss) noexcept;
@@ -300,35 +315,6 @@ public:
     socket_address local_address() const;
 };
 
-}
-
-#if SEASTAR_API_LEVEL <= 1
-
-SEASTAR_INCLUDE_API_V1 namespace api_v1 {
-
-class server_socket {
-    api_v2::server_socket _impl;
-private:
-    static api_v2::server_socket make_v2_server_socket(std::unique_ptr<net::api_v1::server_socket_impl>);
-public:
-    using load_balancing_algorithm = api_v2::server_socket::load_balancing_algorithm;
-    server_socket();
-    explicit server_socket(std::unique_ptr<net::api_v1::server_socket_impl> ssi);
-    explicit server_socket(std::unique_ptr<net::api_v2::server_socket_impl> ssi);
-    server_socket(server_socket&& ss) noexcept;
-    server_socket(api_v2::server_socket&& ss);
-    ~server_socket();
-    operator api_v2::server_socket() &&;
-    server_socket& operator=(server_socket&& cs) noexcept;
-    future<connected_socket, socket_address> accept();
-    void abort_accept();
-    socket_address local_address() const;
-};
-
-}
-
-#endif
-
 /// @}
 
 struct listen_options {
@@ -336,6 +322,11 @@ struct listen_options {
     server_socket::load_balancing_algorithm lba = server_socket::load_balancing_algorithm::default_;
     transport proto = transport::TCP;
     int listen_backlog = 100;
+    unsigned fixed_cpu = 0u;
+    void set_fixed_cpu(unsigned cpu) {
+        lba = server_socket::load_balancing_algorithm::fixed;
+        fixed_cpu = cpu;
+    }
 };
 
 class network_interface {

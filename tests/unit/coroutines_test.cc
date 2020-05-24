@@ -19,11 +19,24 @@
  * Copyright (C) 2019 ScyllaDB Ltd.
  */
 
-#include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/testing/test_case.hh>
 
+#if __cplusplus > 201703L
+#include <version>
+#endif
+
 using namespace seastar;
+
+#if !defined(__cpp_lib_coroutine) && !defined(SEASTAR_COROUTINES_TS)
+
+SEASTAR_TEST_CASE(test_coroutines_not_compiled_in) {
+    return make_ready_future<>();
+}
+
+#else
+
+#include <seastar/core/coroutine.hh>
 
 namespace {
 
@@ -91,7 +104,9 @@ SEASTAR_TEST_CASE(test_scheduling_group) {
 
     BOOST_REQUIRE(current_scheduling_group() == default_scheduling_group());
     auto f_ret = with_scheduling_group(other_sg,
-            [other_sg] (future<> f1, future<> f2, promise<> p1, promise<> p2) -> future<int> {
+            [other_sg_cap = other_sg] (future<> f1, future<> f2, promise<> p1, promise<> p2) -> future<int> {
+        // Make a copy in the coroutine before the lambda is destroyed.
+        auto other_sg = other_sg_cap;
         BOOST_REQUIRE(current_scheduling_group() == other_sg);
         BOOST_REQUIRE(other_sg == other_sg);
         p1.set_value();
@@ -112,3 +127,5 @@ SEASTAR_TEST_CASE(test_scheduling_group) {
     BOOST_REQUIRE_EQUAL(co_await std::move(f_ret), 42);
     BOOST_REQUIRE(current_scheduling_group() == default_scheduling_group());
 }
+
+#endif

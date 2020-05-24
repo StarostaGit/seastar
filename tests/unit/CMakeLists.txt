@@ -70,7 +70,7 @@ function (seastar_add_test name)
   cmake_parse_arguments (parsed_args
     ""
     "WORKING_DIRECTORY;KIND"
-    "RUN_ARGS;SOURCES;LIBRARIES"
+    "RUN_ARGS;SOURCES;LIBRARIES;DEPENDS"
     ${ARGN})
 
   if (NOT parsed_args_KIND)
@@ -127,6 +127,14 @@ function (seastar_add_test name)
     target_compile_definitions (${executable_target}
       PRIVATE SEASTAR_TESTING_MAIN)
 
+    if ((Seastar_STACK_GUARDS STREQUAL "ON") OR
+        ((Seastar_STACK_GUARDS STREQUAL "DEFAULT") AND
+         (CMAKE_BUILD_TYPE IN_LIST Seastar_STACK_GUARD_MODES)))
+      target_compile_definitions (${executable_target}
+        PRIVATE
+          SEASTAR_THREAD_STACK_GUARDS)
+    endif ()
+
     target_include_directories (${executable_target}
       PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -156,6 +164,10 @@ function (seastar_add_test name)
     list (APPEND forwarded_args WORKING_DIRECTORY ${parsed_args_WORKING_DIRECTORY})
   endif ()
 
+  if (parsed_args_DEPENDS)
+    add_dependencies(${executable_target} ${parsed_args_DEPENDS})
+  endif()
+
   add_custom_target (${target}
     ${forwarded_args}
     USES_TERMINAL)
@@ -166,7 +178,8 @@ function (seastar_add_test name)
 
   set_tests_properties (Seastar.unit.${name}
     PROPERTIES
-      TIMEOUT ${Seastar_TEST_TIMEOUT})
+      TIMEOUT ${Seastar_TEST_TIMEOUT}
+      ENVIRONMENT "${Seastar_TEST_ENVIRONMENT}")
 endfunction ()
 
 #
@@ -252,10 +265,8 @@ seastar_add_test (circular_buffer_fixed_capacity
 seastar_add_test (connect
   SOURCES connect_test.cc)
 
-if (Seastar_EXPERIMENTAL_COROUTINES_TS)
-  seastar_add_test (coroutines
-    SOURCES coroutines_test.cc)
-endif ()
+seastar_add_test (coroutines
+  SOURCES coroutines_test.cc)
 
 seastar_add_test (defer
   SOURCES defer_test.cc)
@@ -266,7 +277,7 @@ seastar_add_test (deleter
 seastar_add_app_test (directory
   SOURCES directory_test.cc)
 
-seastar_add_app_test (distributed
+seastar_add_test (distributed
   SOURCES distributed_test.cc)
 
 seastar_add_test (dns
@@ -284,8 +295,14 @@ seastar_add_test (fair_queue
 seastar_add_test (file_io
   SOURCES file_io_test.cc)
 
+seastar_add_test (file_utils
+  SOURCES file_utils_test.cc)
+
 seastar_add_test (foreign_ptr
   SOURCES foreign_ptr_test.cc)
+
+seastar_add_test (fsnotifier
+  SOURCES fsnotifier_test.cc)
 
 seastar_add_test (fstream
   SOURCES
@@ -394,13 +411,18 @@ seastar_add_test (uname
   SOURCES uname_test.cc)
 
 set (tls_certificate_files
+  tls-ca-bundle.pem
   catest.key
   catest.pem
-  tls-ca-bundle.pem
   test.crl
   test.crt
   test.csr
-  test.key)
+  test.key
+  caother.key
+  caother.pem
+  other.crt
+  other.csr
+  other.key)
 
 prepend_each (
   in_tls_certificate_files
@@ -417,17 +439,20 @@ add_custom_command (
   OUTPUT ${out_tls_certificate_files}
   COMMAND ${CMAKE_COMMAND} -E copy ${in_tls_certificate_files} ${CMAKE_CURRENT_BINARY_DIR})
 
-# TODO: Disabled for now. See GH-514.
-# seastar_add_test (tls
-#   DEPENDS ${out_tls_certificate_files}
-#   SOURCES tls_test.cc
-#   WORKING_DIRECTORY ${Seastar_BINARY_DIR})
+add_custom_target(tls_files
+  DEPENDS ${out_tls_certificate_files}
+)
+
+seastar_add_test (tls
+  DEPENDS tls_files
+  SOURCES tls_test.cc
+  WORKING_DIRECTORY ${Seastar_BINARY_DIR})
 
 seastar_add_test (tuple_utils
   KIND BOOST
   SOURCES tuple_utils_test.cc)
 
-seastar_add_test (unixdomain
+seastar_add_test (unix_domain
   SOURCES unix_domain_test.cc)
 
 seastar_add_test (unwind

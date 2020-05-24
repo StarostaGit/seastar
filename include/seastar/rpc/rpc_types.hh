@@ -29,6 +29,7 @@
 #include <seastar/util/std-compat.hh>
 #include <seastar/util/variant_utils.hh>
 #include <seastar/core/timer.hh>
+#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <boost/functional/hash.hpp>
@@ -120,6 +121,9 @@ struct no_wait_type {};
 // return this from a callback if client does not want to waiting for a reply
 extern no_wait_type no_wait;
 
+/// \addtogroup rpc
+/// @{
+
 template <typename T>
 class optional : public compat::optional<T> {
 public:
@@ -133,6 +137,8 @@ public:
          static_cast<compat::optional<rpc_clock_type::time_point>&>(*this) = time_point;
      }
 };
+
+/// @}
 
 struct cancellable {
     std::function<void()> cancel_send;
@@ -256,6 +262,9 @@ using xshard_connection_ptr = lw_shared_ptr<foreign_ptr<shared_ptr<connection>>>
 constexpr size_t max_queued_stream_buffers = 50;
 constexpr size_t max_stream_buffers_memory = 100 * 1024;
 
+/// \addtogroup rpc
+/// @{
+
 // send data Out...
 template<typename... Out>
 class sink {
@@ -343,6 +352,8 @@ public:
     using std::tuple<T...>::tuple;
     tuple(std::tuple<T...>&& x) : std::tuple<T...>(std::move(x)) {}
 };
+
+/// @}
 
 #if __cplusplus >= 201703L
 

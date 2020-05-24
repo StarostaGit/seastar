@@ -27,7 +27,14 @@
 namespace seastar {
 namespace rpc {
 
-const sstring lz4_fragmented_compressor::factory::_name = "LZ4_FRAGMENTED";
+const sstring& lz4_fragmented_compressor::factory::supported() const {
+    const static sstring name = "LZ4_FRAGMENTED";
+    return name;
+}
+
+std::unique_ptr<rpc::compressor> lz4_fragmented_compressor::factory::negotiate(sstring feature, bool is_server) const {
+    return feature == supported() ? std::make_unique<lz4_fragmented_compressor>() : nullptr;
+}
 
 // Compressed message format:
 // The message consists of one or more data chunks each preceeded by a 4 byte header.
@@ -92,7 +99,7 @@ snd_buf lz4_fragmented_compressor::compress(size_t head_space, snd_buf data) {
 
     static constexpr size_t chunk_compress_bound = LZ4_COMPRESSBOUND(chunk_size);
     static constexpr size_t chunk_maximum_compressed_size = chunk_compress_bound + chunk_header_size;
-    static_assert(chunk_maximum_compressed_size < snd_buf::chunk_size);
+    static_assert(chunk_maximum_compressed_size < snd_buf::chunk_size, "chunk_maximum_compressed_size is too large");
 
     std::vector<temporary_buffer<char>> dst_buffers;
     size_t dst_offset = head_space;

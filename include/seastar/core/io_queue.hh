@@ -26,10 +26,13 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/internal/io_request.hh>
 #include <mutex>
 #include <array>
 
 namespace seastar {
+
+class io_priority_class;
 
 /// Renames an io priority class
 ///
@@ -84,9 +87,15 @@ private:
 
     priority_class_data& find_or_create_class(const io_priority_class& pc, shard_id owner);
     friend class smp;
-public:
-    enum class request_type { read, write };
+    fair_queue_ticket _completed_accumulator = { 0, 0 };
 
+    // The fields below are going away, they are just here so we can implement deprecated
+    // functions that used to be provided by the fair_queue and are going away (from both
+    // the fair_queue and the io_queue). Double-accounting for now will allow for easier
+    // decoupling and is temporary
+    size_t _queued_requests = 0;
+    size_t _requests_executing = 0;
+public:
     // We want to represent the fact that write requests are (maybe) more expensive
     // than read requests. To avoid dealing with floating point math we will scale one
     // read request to be counted by this amount.
@@ -111,26 +120,28 @@ public:
     io_queue(config cfg);
     ~io_queue();
 
-    future<internal::linux_abi::io_event>
-    queue_request(const io_priority_class& pc, size_t len, request_type req_type, noncopyable_function<void (internal::linux_abi::iocb&)> do_io);
+    future<size_t>
+    queue_request(const io_priority_class& pc, size_t len, internal::io_request req) noexcept;
 
-    size_t capacity() const {
+    [[deprecated("modern I/O queues should use a property file")]] size_t capacity() const {
         return _config.capacity;
     }
 
+    [[deprecated("I/O queue users should not track individual requests, but resources (weight, size) passing through the queue")]]
     size_t queued_requests() const {
-        return _fq.waiters();
+        return _queued_requests;
     }
 
     // How many requests are sent to disk but not yet returned.
+    [[deprecated("I/O queue users should not track individual requests, but resources (weight, size) passing through the queue")]]
     size_t requests_currently_executing() const {
-        return _fq.requests_currently_executing();
+        return _requests_executing;
     }
 
+    void notify_requests_finished(fair_queue_ticket& desc);
+
     // Inform the underlying queue about the fact that some of our requests finished
-    void notify_requests_finished(fair_queue_request_descriptor& desc) {
-        _fq.notify_requests_finished(desc);
-    }
+    void process_completions();
 
     // Dispatch requests that are pending in the I/O queue
     void poll_io_queue() {

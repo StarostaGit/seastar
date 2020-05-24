@@ -24,7 +24,7 @@
 #include <typeindex>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/function_traits.hh>
-#include <seastar/util/gcc6-concepts.hh>
+#include <seastar/util/concepts.hh>
 
 /// \file
 
@@ -38,12 +38,15 @@ class future;
 class reactor;
 
 class scheduling_group;
+class scheduling_group_key;
 
 namespace internal {
 
 // Returns an index between 0 and max_scheduling_groups()
 unsigned scheduling_group_index(scheduling_group sg);
 scheduling_group scheduling_group_from_index(unsigned index);
+
+unsigned long scheduling_group_key_id(scheduling_group_key);
 
 }
 
@@ -152,9 +155,16 @@ private:
     friend T& scheduling_group_get_specific(scheduling_group sg, scheduling_group_key key);
     template<typename T>
     friend T& scheduling_group_get_specific(scheduling_group_key key);
+
+    friend unsigned long internal::scheduling_group_key_id(scheduling_group_key key);
 };
 
 namespace internal {
+
+inline unsigned long scheduling_group_key_id(scheduling_group_key key) {
+    return key.id();
+}
+
 /**
  * @brief A function in the spirit of Cpp17 apply, but specifically for constructors.
  * This function is used in order to preserve support in Cpp14.
@@ -271,15 +281,15 @@ public:
     friend scheduling_group internal::scheduling_group_from_index(unsigned index);
 
     template<typename SpecificValType, typename Mapper, typename Reducer, typename Initial>
-    GCC6_CONCEPT( requires requires(SpecificValType specific_val, Mapper mapper, Reducer reducer, Initial initial) {
-        {reducer(initial, mapper(specific_val))} -> Initial;
+    SEASTAR_CONCEPT( requires requires(SpecificValType specific_val, Mapper mapper, Reducer reducer, Initial initial) {
+        {reducer(initial, mapper(specific_val))} -> std::convertible_to<Initial>;
     })
     friend future<typename function_traits<Reducer>::return_type>
     map_reduce_scheduling_group_specific(Mapper mapper, Reducer reducer, Initial initial_val, scheduling_group_key key);
 
     template<typename SpecificValType, typename Reducer, typename Initial>
-    GCC6_CONCEPT( requires requires(SpecificValType specific_val, Reducer reducer, Initial initial) {
-        {reducer(initial, specific_val)} -> Initial;
+    SEASTAR_CONCEPT( requires requires(SpecificValType specific_val, Reducer reducer, Initial initial) {
+        {reducer(initial, specific_val)} -> std::convertible_to<Initial>;
     })
     friend future<typename function_traits<Reducer>::return_type>
         reduce_scheduling_group_specific(Reducer reducer, Initial initial_val, scheduling_group_key key);

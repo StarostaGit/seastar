@@ -430,6 +430,30 @@ The `[obj = ...]` capture syntax we used here is new to C++14. This is the main 
 
 The extra `() mutable` syntax was needed here because by default when C++ captures a value (in this case, the value of std::move(obj)) into a lambda, it makes this value read-only, so our lambda cannot, in this example, move it again. Adding `mutable` removes this artificial restriction.
 
+## Evaluation order considerations (C++14 only)
+
+C++14 (and below) does *not* guarantee that lambda captures in continuations will be evaluated after the futures they relate to are evaluated
+(See https://en.cppreference.com/w/cpp/language/eval_order).
+
+Consequently, avoid the programming pattern below:
+```cpp
+    return do_something(obj).then([obj = std::move(obj)] () mutable {
+        return do_something_else(std::move(obj));
+    });
+```
+
+In the example above, `[obj = std::move(obj)]` might be evaluated before `do_something(obj)` is called, potentially leading to use-after-move of `obj`.
+
+To guarantee the desired evaluation order, the expression above may be broken into separate statments as follows:
+```cpp
+    auto fut = do_something(obj);
+    return fut.then([obj = std::move(obj)] () mutable {
+        return do_something_else(std::move(obj));
+    });
+```
+
+This was changed in C++17. The expression that creates the object the function `then` is called on (the future) is evaluated before all the arguments to the function, so this style is not required in C++17 and above.
+
 ## Chaining continuations
 TODO: We already saw chaining example in slow() above. talk about the return from then, and returning a future and chaining more thens.
 
@@ -521,14 +545,14 @@ Here, `fail()` catches the exception thrown by `inner()`, whatever it might be, 
 > Therefore, unless a function --- including asynchronous functions --- is explicitly tagged "`noexcept`", the application should be prepared to handle exceptions thrown from it. In modern C++, code usually uses RAII to be exception-safe without sprinkling it with `try`/`catch`.  `seastar::defer()` is a RAII-based idiom that ensures that some cleanup code is run even if an exception is thrown.
 
 
-Seastar has a convenient generic function, `futurize_apply()`, which can be useful here. `futurize_apply(func, args...)` runs a function which may return either a future value or an immediate value, and in both cases convert the result into a future value. `futurize_apply()` also converts an immediate exception thrown by the function, if any, into a failed future, just like we did above. So using `futurize_apply()` we can make the above example work even if `fail()` did throw exceptions:
+Seastar has a convenient generic function, `futurize_invoke()`, which can be useful here. `futurize_invoke(func, args...)` runs a function which may return either a future value or an immediate value, and in both cases convert the result into a future value. `futurize_invoke()` also converts an immediate exception thrown by the function, if any, into a failed future, just like we did above. So using `futurize_invoke()` we can make the above example work even if `fail()` did throw exceptions:
 
 ```cpp
 seastar::future<> fail() {
     throw my_exception();
 }
 seastar::future<> f() {
-    return seastar::futurize_apply(fail).finally([] {
+    return seastar::futurize_invoke(fail).finally([] {
         std::cout << "cleaning up\n";
     });
 }
@@ -546,7 +570,7 @@ seastar::future<> f() {
 }
 ```
 
-Here, the lambda function of the first continuation does throw an exception instead of returning a failed future. However, we do _not_ have the same problem as before, which only happened because an asynchronous function threw an exception _before_ returning a valid future. Here, `f()` does return a valid future immediately - the failure will only be known later, after `sleep()` resolves. The message in `finally()` will be printed. Under the hood, the methods which attach continuations (such as `then()` and `finally()`) run the continuation functions using `futurize_apply()`, so continuation functions may return immediate values or, in this case, throw an immediate exception, and still work properly.
+Here, the lambda function of the first continuation does throw an exception instead of returning a failed future. However, we do _not_ have the same problem as before, which only happened because an asynchronous function threw an exception _before_ returning a valid future. Here, `f()` does return a valid future immediately - the failure will only be known later, after `sleep()` resolves. The message in `finally()` will be printed. The methods which attach continuations (such as `then()` and `finally()`) run the continuation the same way, so continuation functions may return immediate values or, in this case, throw an immediate exception, and still work properly.
 
 # Lifetime management
 An asynchronous function starts an operation which may continue long after the function returns: The function itself returns a `future<T>` almost immediately, but it may take a while until this future is resolved.
@@ -985,7 +1009,7 @@ seastar::future<> g() {
 }
 ```
 
-But this version is **not** exception safe: Consider what happens if `slow()` throws an exception before returning a future (this is different from `slow()` returning an exceptional future - we discussed this difference in the section about exception handling). In this case, we decreased the counter, but the `finally()` will never be reached, and the counter will never be increased back. There is a way to fix this code, by replacing the call to `slow()` with `seastar::futurize_apply(slow)`. But the point we're trying to make here is not how to fix buggy code, but rather that by using the separate `semaphore::wait()` and `semaphore::signal()` functions, you can very easily get things wrong.
+But this version is **not** exception safe: Consider what happens if `slow()` throws an exception before returning a future (this is different from `slow()` returning an exceptional future - we discussed this difference in the section about exception handling). In this case, we decreased the counter, but the `finally()` will never be reached, and the counter will never be increased back. There is a way to fix this code, by replacing the call to `slow()` with `seastar::futurize_invoke(slow)`. But the point we're trying to make here is not how to fix buggy code, but rather that by using the separate `semaphore::wait()` and `semaphore::signal()` functions, you can very easily get things wrong.
 
 For exception safety, in C++ it is generally not recommended to have separate resource acquisition and release functions.  Instead, C++ offers safer mechanisms for acquiring a resource (in this case seamphore units) and later releasing it: lambda functions, and RAII ("resource acquisition is initialization"):
 
@@ -1072,7 +1096,7 @@ seastar::future<> f() {
     return seastar::do_with(seastar::semaphore(100), [] (auto& limit) {
         return seastar::repeat([&limit] {
             return limit.wait(1).then([&limit] {
-                seastar::futurize_apply(slow).finally([&limit] {
+                seastar::futurize_invoke(slow).finally([&limit] {
                     limit.signal(1); 
                 });
                 return seastar::stop_iteration::no;
@@ -1084,7 +1108,7 @@ seastar::future<> f() {
 
 Note how this code differs from the code we saw above for limiting the number of parallel invocations of a function `g()`:
 1. Here we cannot use a single `thread_local` semaphore. Each call to `f()` has its loop with parallelism of 100, so needs its own semaphore "`limit`", kept alive during the loop with `do_with()`.
-2. Here we do not wait for `slow()` to complete before continuing the loop, i.e., we do not `return` the future chain starting at `futurize_apply(slow)`. The loop continues to the next iteration when a semaphore unit becomes available, while (in our example) 99 other operations might be ongoing in the background and we do not wait for them.
+2. Here we do not wait for `slow()` to complete before continuing the loop, i.e., we do not `return` the future chain starting at `futurize_invoke(slow)`. The loop continues to the next iteration when a semaphore unit becomes available, while (in our example) 99 other operations might be ongoing in the background and we do not wait for them.
 
 In the examples in this section, we cannot use the `with_semaphore()` shortcut. `with_semaphore()` returns a future which only resolves after the lambda's returned future resolves. But in the above example, the loop needs to know when just the semaphore units are available, to start the next iteration --- and not wait for the previous iteration to complete. We could not achieve that with `with_semaphore()`. But the more general exception-safe idiom, `seastar::get_units()`, can be used in this case, and is recommended:
 
@@ -1131,7 +1155,7 @@ seastar::future<> f() {
                 boost::counting_iterator<int>(456), [&gate] (int i) {
             return seastar::get_units(limit, 1).then([&gate] (auto units) {
                 gate.enter();
-                seastar::futurize_apply(slow).finally([&gate, units = std::move(units)] {
+                seastar::futurize_invoke(slow).finally([&gate, units = std::move(units)] {
                     gate.leave();
                 });
 	        });
@@ -1438,9 +1462,74 @@ It is often a mistake to silently ignore an exception, so if the future we're ig
 
 The ```handle_connection()``` function itself is straightforward --- it repeatedly calls ```read()``` read on the input stream, to receive a ```temporary_buffer``` with some data, and then moves this temporary buffer into a ```write()``` call on the output stream. The buffer will eventually be freed, automatically, when the ```write()``` is done with it. When ```read()``` eventually returns an empty buffer signifying the end of input, we stop ```repeat```'s iteration by returning a ```stop_iteration::yes```.
 
-# Sharded servers
+# Sharded services
 
-Discuss `sharded<>`, its benefits over directly using smp::submit_to() as above, etc.
+In the previous section we saw that a Seastar application usually needs to run its code on all available CPU cores. We saw that the `seastar::smp::submit_to()` function allows the main function, which initially runs only on the first core, to start the server's code on all `seastar::smp::count` cores.
+
+However, usually one needs not just to run code on each core, but also to have an object that contains the state of this code. Additionally, one may like to interact with those different objects, and also have a mechanism to stop the service running on the different cores.
+
+The `seastar::sharded<T>` template provides a structured way create such a _sharded service_. It creates a separate object of type `T` in each core, and provides mechanisms to interact with those copies, to start some code on each, and finally to cleanly stop the service.
+
+To use `seastar::sharded`, first create a class for the object holding the state of the service on a single core. For example:
+
+```cpp
+#include <seastar/core/future.hh>
+#include <iostream>
+
+class my_service {
+public:
+    std::string _str;
+    my_service(const std::string& str) : _str(str) { }
+    seastar::future<> run() {
+        std::cerr << "running on " << seastar::engine().cpu_id() <<
+            ", _str = " << _str << \n";
+        return seastar::make_ready_future<>();
+    }
+    seastar::future<> stop() {
+        return seastar::make_ready_future<>();
+    }
+};
+```
+
+The only mandatory method in this object is `stop()`, which will be called in each core when we want to stop the sharded service and want to wait until it stops on all cores.
+
+Now let's see how to use it:
+
+```cpp
+#include <seastar/core/sharded.hh>
+
+seastar::sharded<my_service> s;
+
+seastar::future<> f() {
+    return s.start(std::string("hello")).then([] {
+        return s.invoke_on_all([] (my_service& local_service) {
+            return local_service.run();
+        });
+    }).then([] {
+        return s.stop();
+    });
+}
+```
+
+The `s.start()` starts the service by creating a `my_service` object on each of the cores. The arguments to `s.start()`, if any (in this example, `std::string("hello")`), are passed to `my_service`'s constructor.
+
+But `s.start()` did not start running any code yet (besides the object's constructor). For that, we have the `s.invoke_on_all()` which runs the given lambda on all the cores - giving each lambda the local `my_service` object on that core. In this example, we have a `run()` method on each object, so we run that.
+
+Finally, at the end of the run we want to give the service on all cores a chance to shut down cleanly, so we call `s.stop()`. This will call the `stop()` method on each core's object, and wait for all of them to finish. Calling `s.stop()` before destroying `s` is mandatory - Seastar will warn you if you forget to do it.
+
+In addition to `invoke_on_all()` which runs the same code on all shards, another feature a sharded service often needs is for one shard to invoke code another specific shard. This is done by calling the sharded service's `invoke_on()` method. For example:
+
+```cpp
+seastar::sharded<my_service> s;
+...
+return s.invoke_on(0, [] (my_service& local_service) {
+    std::cerr << "invoked on " << seastar::engine().cpu_id() <<
+        ", _str = " << local_service._str << "\n";
+});
+```
+
+This runs the lambda function on shard 0, with a reference to the local `my_service` object on that shard. 
+
 
 # Shutting down cleanly
 
@@ -1524,6 +1613,7 @@ For example, consider this code:
 ```cpp
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/app-template.hh>
 
 class myexception {};
 
@@ -1535,26 +1625,53 @@ seastar::future<> f() {
     g();
     return seastar::sleep(std::chrono::seconds(1));
 }
+
+int main(int argc, char** argv) {
+    seastar::app_template app;
+    app.run(argc, argv, f);
+}
 ```
 
 Here, the main function `f()` calls `g()`, but doesn't do anything with the future it returns. But this future resolves with an exception, and this exception is silently ignored. So Seastar prints this warning message about the ignored exception:
 ```
-WARN  2018-01-11 13:23:17,976 [shard 0] seastar - Exceptional future ignored:
-myexception, backtrace: 0x41ce24
-  0x63729e
-  0x636cd5
-  0x4fa6ec
-  0x4fb0e8
-  0x5010e0
-  0x41bf96
-  0x41c26c
-  0x46a734
-  0x4fd661
-  0x4fe1e2
-  0x4fe332
-  0x417a0b
-  /lib64/libc.so.6+0x21009
-  0x417b99
+WARN  2020-03-31 11:08:09,208 [shard 0] seastar - Exceptional future ignored: myexception, backtrace:   /lib64/libasan.so.5+0x6ce7f
+  0x1a64193
+  0x1a6265f
+  0xf326cc
+  0xeaf1a0
+  0xeaffe4
+  0xead7be
+  0xeb5917
+  0xee2477
+  0xec312e
+  0xec8fcf
+  0xeec765
+  0xee1b29
+  0xed9fab
+  0xec27c8
+  0xec867f
+  0xf00acc
+  0xef179d
+  0xef1824
+  0xef18b5
+  0xee4827
+  0xee470f
+  0xf00f81
+  0xebac29
+  0xeb9095
+  0xeb9174
+  0xeb925a
+  0xeb9964
+  0xebef89
+  0x10f74c3
+  0x10fb439
+  0x11005fd
+  0xec4f08
+  0xec2f43
+  0xec3461
+  0xeadabe
+  /lib64/libc.so.6+0x271a2
+  0xead52d
 ```
 
 This message says that an exceptional future was ignored, and that the type of the exception was "`myexception`". The type of the exception is usually not enough to pinpoint where the problem happened, so the warning message also includes the backtrace - the call chain - leading to where the exceptional future was destroyed. The backtrace is given as a list of addresses, where code in other shared libraries is written as a shared library plus offset (when ASLR is enabled, the shared libraries are mapped in a different address each time).
@@ -1568,43 +1685,54 @@ seastar-addr2line -e a.out
 And then paste the list of addresses in the warning message, and conclude with a `control-D` (it's also possible, if you want, to put the list of addresses in the `seastar-addr2line` command line). The result looks like this:
 
 ```
-seastar::report_failed_future(std::__exception_ptr::exception_ptr) at /home/nyh/seastar/core/reactor.cc:4201
-seastar::future<>::~future() at /home/nyh/seastar/core/future.hh:828
- (inlined by) f() at /home/nyh/seastar/doc/code/26.cc:11
-std::_Function_handler<seastar::future<> (), seastar::future<> (*)()>::_M_invoke(std::_Any_data const&) at /usr/include/c++/7/bits/std_function.h:302
-std::function<seastar::future<> ()>::operator()() const at /usr/include/c++/7/bits/std_function.h:706
- (inlined by) operator() at /home/nyh/seastar/core/app-template.cc:119
- (inlined by) _M_invoke at /usr/include/c++/7/bits/std_function.h:302
-std::function<seastar::future<int> ()>::operator()() const at /usr/include/c++/7/bits/std_function.h:706
- (inlined by) seastar::future<int> seastar::futurize<seastar::future<int> >::apply<std::function<seastar::future<int> ()>&>(std::function<seastar::future<int> ()>&) at /home/nyh/seastar/core/future.hh:1362
- (inlined by) auto seastar::futurize_apply<std::function<seastar::future<int> ()>&>(std::function<seastar::future<int> ()>&) at /home/nyh/seastar/core/future.hh:1420
- (inlined by) operator() at /home/nyh/seastar/core/app-template.cc:108
- (inlined by) _M_invoke at /usr/include/c++/7/bits/std_function.h:316
-std::function<void ()>::operator()() const at /usr/include/c++/7/bits/std_function.h:706
- (inlined by) seastar::apply_helper<std::function<void ()>, std::tuple<>&&, std::integer_sequence<unsigned long> >::apply(std::function<void ()>&&, std::tuple<>&&) at /home/nyh/seastar/core/apply.hh:36
- (inlined by) auto seastar::apply<std::function<void ()>>(std::function<void ()>&&, std::tuple<>&&) at /home/nyh/seastar/core/apply.hh:44
- (inlined by) std::enable_if<!seastar::is_future<std::result_of<std::function<void ()> ()>::type>::value, seastar::future<> >::type seastar::do_void_futurize_apply_tuple<std::function<void ()>>(std::function<void ()>&&, std::tuple<>&&) at /home/nyh/seastar/core/future.hh:1320
- (inlined by) seastar::future<> seastar::futurize<void>::apply<std::function<void ()>>(std::function<void ()>&&, std::tuple<>&&) at /home/nyh/seastar/core/future.hh:1340
- (inlined by) seastar::future<> seastar::future<>::then<std::function<void ()>, seastar::future<> >(std::function<void ()>&&)::{lambda(auto:1&&)#1}::operator()<seastar::future_state<> >(auto, std::function<void ()>&&) at /home/nyh/seastar/core/future.hh:933
- (inlined by) seastar::continuation<seastar::future<> seastar::future<>::then<std::function<void ()>, seastar::future<> >(std::function<void ()>&&)::{lambda(auto:1&&)#1}>::run_and_dispose() at /home/nyh/seastar/core/future.hh:413
-seastar::reactor::run_tasks(seastar::reactor::task_queue&) at /home/nyh/seastar/core/reactor.cc:2487
-seastar::reactor::run_some_tasks(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >&) at /home/nyh/seastar/core/reactor.cc:2884
-seastar::reactor::run_some_tasks(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >&) at /usr/include/c++/7/chrono:377
- (inlined by) seastar::reactor::run() at /home/nyh/seastar/core/reactor.cc:3028
-seastar::app_template::run_deprecated(int, char**, std::function<void ()>&&) at /home/nyh/seastar/core/app-template.cc:180
-seastar::app_template::run(int, char**, std::function<seastar::future<int> ()>&&) at /home/nyh/seastar/core/app-template.cc:113
-seastar::app_template::run(int, char**, std::function<seastar::future<> ()>&&) at /home/nyh/seastar/core/app-template.cc:122
-main at /home/nyh/seastar/doc/code/main.cc:11
-__libc_start_main at ??:?
-``` 
+void seastar::backtrace<seastar::current_backtrace()::{lambda(seastar::frame)#1}>(seastar::current_backtrace()::{lambda(seastar::frame)#1}&&) at include/seastar/util/backtrace.hh:56
+seastar::current_backtrace() at src/util/backtrace.cc:84
+seastar::report_failed_future(std::__exception_ptr::exception_ptr const&) at src/core/future.cc:116
+seastar::future_state_base::~future_state_base() at include/seastar/core/future.hh:335
+seastar::future_state<>::~future_state() at include/seastar/core/future.hh:414
+ (inlined by) seastar::future<>::~future() at include/seastar/core/future.hh:990
+f() at test.cc:12
+std::_Function_handler<seastar::future<> (), seastar::future<> (*)()>::_M_invoke(std::_Any_data const&) at /usr/include/c++/9/bits/std_function.h:286
+std::function<seastar::future<> ()>::operator()() const at /usr/include/c++/9/bits/std_function.h:690
+seastar::app_template::run(int, char**, std::function<seastar::future<> ()>&&)::{lambda()#1}::operator()() const at src/core/app-template.cc:131
+std::_Function_handler<seastar::future<int> (), seastar::app_template::run(int, char**, std::function<seastar::future<> ()>&&)::{lambda()#1}>::_M_invoke(std::_Any_data const&) at /usr/include/c++/9/bits/std_function.h:286
+std::function<seastar::future<int> ()>::operator()() const at /usr/include/c++/9/bits/std_function.h:690
+seastar::future<int> seastar::futurize<seastar::future<int> >::invoke<std::function<seastar::future<int> ()>&>(std::function<seastar::future<int> ()>&) at include/seastar/core/future.hh:1670
+auto seastar::futurize_invoke<std::function<seastar::future<int> ()>&>(std::function<seastar::future<int> ()>&) at include/seastar/core/future.hh:1754
+seastar::app_template::run(int, char**, std::function<seastar::future<int> ()>&&)::{lambda()#1}::operator()() at src/core/app-template.cc:120 (discriminator 4)
+std::_Function_handler<void (), seastar::app_template::run(int, char**, std::function<seastar::future<int> ()>&&)::{lambda()#1}>::_M_invoke(std::_Any_data const&) at /usr/include/c++/9/bits/std_function.h:300
+std::function<void ()>::operator()() const at /usr/include/c++/9/bits/std_function.h:690
+seastar::apply_helper<std::function<void ()>&, std::tuple<>&&, std::integer_sequence<unsigned long> >::apply(std::function<void ()>&, std::tuple<>&&) at include/seastar/core/apply.hh:36
+auto seastar::apply<std::function<void ()>&>(std::function<void ()>&, std::tuple<>&&) at include/seastar/core/apply.hh:44
+seastar::future<> seastar::futurize<void>::apply<std::function<void ()>&>(std::function<void ()>&, std::tuple<>&&) at include/seastar/core/future.hh:1634
+auto seastar::futurize_apply<std::function<void ()>&>(std::function<void ()>&, std::tuple<>&&) at include/seastar/core/future.hh:1766
+seastar::future<>::then<std::function<void ()>, seastar::future<> >(std::function<void ()>&&)::{lambda()#1}::operator()() at include/seastar/core/future.hh:1191
+seastar::noncopyable_function<seastar::future<> ()>::direct_vtable_for<seastar::future<>::then<std::function<void ()>, seastar::future<> >(std::function<void ()>&&)::{lambda()#1}>::call(seastar::noncopyable_function<seastar::future<> ()> const*) at include/seastar/util/noncopyable_function.hh:101
+seastar::noncopyable_function<seastar::future<> ()>::operator()() const at include/seastar/util/noncopyable_function.hh:184
+seastar::apply_helper<seastar::noncopyable_function<seastar::future<> ()>, std::tuple<>&&, std::integer_sequence<unsigned long> >::apply(seastar::noncopyable_function<seastar::future<> ()>&&, std::tuple<>&&) at include/seastar/core/apply.hh:36
+auto seastar::apply<seastar::noncopyable_function<seastar::future<> ()>>(seastar::noncopyable_function<seastar::future<> ()>&&, std::tuple<>&&) at include/seastar/core/apply.hh:44
+seastar::future<> seastar::futurize<seastar::future<> >::apply<seastar::noncopyable_function<seastar::future<> ()>>(seastar::noncopyable_function<seastar::future<> ()>&&, std::tuple<>&&) at include/seastar/core/future.hh:1660
+seastar::future<>::then_impl_nrvo<seastar::noncopyable_function<seastar::future<> ()>, seastar::future<> >(seastar::noncopyable_function<seastar::future<> ()>&&)::{lambda()#1}::operator()() const::{lambda(seastar::internal::promise_base_with_type<>&, seastar::future_state<>&&)#1}::operator()(seastar::internal::promise_base_with_type<>, seastar::future_state<>) at include/seastar/core/future.hh:1213
+seastar::continuation<seastar::internal::promise_base_with_type<>, seastar::future<>::then_impl_nrvo<seastar::noncopyable_function<seastar::future<> ()>, seastar::future<> >(seastar::noncopyable_function<seastar::future<> ()>&&)::{lambda()#1}::operator()() const::{lambda(seastar::internal::promise_base_with_type<>&, seastar::future_state<>&&)#1}>::run_and_dispose() at include/seastar/core/future.hh:509
+seastar::reactor::run_tasks(seastar::reactor::task_queue&) at src/core/reactor.cc:2124
+seastar::reactor::run_some_tasks() at src/core/reactor.cc:2539 (discriminator 2)
+seastar::reactor::run() at src/core/reactor.cc:2694
+seastar::app_template::run_deprecated(int, char**, std::function<void ()>&&) at src/core/app-template.cc:199 (discriminator 1)
+seastar::app_template::run(int, char**, std::function<seastar::future<int> ()>&&) at src/core/app-template.cc:115 (discriminator 2)
+seastar::app_template::run(int, char**, std::function<seastar::future<> ()>&&) at src/core/app-template.cc:130 (discriminator 2)
+main at test.cc:19 (discriminator 1)
+__libc_start_main at /usr/src/debug/glibc-2.30-34-g994e529a37/csu/../csu/libc-start.c:308
+_start at ??:?
+```
 
 Most of the lines at the bottom of this backtrace are not interesting, and just showing the internal details of how Seastar ended up running the main function `f()`. The only interesting part is the _first_ few lines:
 
 ```
-seastar::report_failed_future(std::__exception_ptr::exception_ptr) at
- /home/nyh/seastar/core/reactor.cc:4201
-seastar::future<>::~future() at /home/nyh/seastar/core/future.hh:828
- (inlined by) f() at /home/nyh/seastar/doc/code/26.cc:11
+seastar::report_failed_future(std::__exception_ptr::exception_ptr const&) at src/core/future.cc:116
+seastar::future_state_base::~future_state_base() at include/seastar/core/future.hh:335
+seastar::future_state<>::~future_state() at include/seastar/core/future.hh:414
+ (inlined by) seastar::future<>::~future() at include/seastar/core/future.hh:990
+f() at test.cc:12
 ```
 
 Here we see that the warning message was printed by the `seastar::report_failed_future()` function which was called when destroying a future (`future<>::~future`) that had not been handled. The future's destructor was called in line 11 of our test code (`26.cc`), which is indeed the line where we called `g()` and ignored its result.  

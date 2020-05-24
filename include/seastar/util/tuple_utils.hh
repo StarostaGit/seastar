@@ -23,6 +23,7 @@
 
 #include <tuple>
 #include <utility>
+#include <stddef.h>
 
 namespace seastar {
 
@@ -31,7 +32,7 @@ namespace internal {
 
 template<typename Tuple>
 Tuple untuple(Tuple t) {
-    return std::move(t);
+    return t;
 }
 
 template<typename T>

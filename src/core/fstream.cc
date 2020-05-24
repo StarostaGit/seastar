@@ -252,7 +252,7 @@ private:
             auto end = std::min(align_up(start + _current_buffer_size, align), _pos + _remain);
             auto len = end - start;
             auto actual_size = std::min(end - _pos, _remain);
-            _read_buffers.emplace_back(_pos, actual_size, futurize<future<temporary_buffer<char>>>::apply([&] {
+            _read_buffers.emplace_back(_pos, actual_size, futurize_invoke([&] {
                     return _file.dma_read_bulk<char>(start, len, _options.io_priority_class);
             }).then_wrapped(
                     [this, start, pos = _pos, remain = _remain] (future<temporary_buffer<char>> ret) {
@@ -381,6 +381,7 @@ public:
             // This should only happen when the user calls output_stream::flush().
             auto tmp = allocate_buffer(align_up(buf.size(), _file.disk_write_dma_alignment()));
             ::memcpy(tmp.get_write(), buf.get(), buf.size());
+            ::memset(tmp.get_write() + buf.size(), 0, tmp.size() - buf.size());
             buf = std::move(tmp);
             p = buf.get();
             buf_size = buf.size();
